@@ -109,4 +109,5 @@ curl --location 'http://localhost:8000/api/v1/predict' \
 ```
 
 **Response**
+
 ![response](./response.png)
