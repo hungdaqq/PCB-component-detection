@@ -59,15 +59,6 @@ def read_imagefile(file) -> np.ndarray:
 
 @router.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    """
-    Predict objects in an uploaded image using YOLO model.
-
-    Args:
-        file (UploadFile): The image file uploaded.
-
-    Returns:
-        dict: Dictionary containing predicted labels and bounding box coordinates.
-    """
     try:
         # Read the uploaded file
         image = read_imagefile(await file.read())
@@ -89,7 +80,6 @@ async def predict(file: UploadFile = File(...)):
                     },
                 }
             )
-        print(results[0])
         return {
             "image_shape": {
                 "height": results[0].orig_shape[0],

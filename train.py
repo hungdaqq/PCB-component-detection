@@ -7,7 +7,7 @@ model = YOLO("yolov8m.pt")  # yolov8n.pt, yolov8m.pt, etc.
 
 # Train the model
 results = model.train(
-    data="/data.yaml",  # Direct dataset details
+    data="./data.yaml",  # Direct dataset details
     epochs=50,  # Number of epochs to train for
     imgsz=1280,  # Image size for training
     batch=4,  # Batch size for training
