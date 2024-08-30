@@ -6,13 +6,10 @@ from fastapi import (
     HTTPException,
     Response,
     Form,
-    Depends,
 )
-from fastapi.responses import StreamingResponse
 import uvicorn
 from typing import Optional
-import io
-import csv
+from collections import Counter
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -80,41 +77,87 @@ async def predict(file: UploadFile = File(...)):
                     },
                 }
             )
+        # Reverse mapping for convenience
+        int_to_class_name = {v: k for k, v in class_name_to_int.items()}
+
+        # Count occurrences
+        counter = Counter(results[0].boxes.cls.tolist())
+
+        # Initialize the result dictionary with all class names set to 0
+        result = {class_name: 0 for class_name in class_name_to_int}
+
+        # Update counts based on the actual occurrences in the list
+        for num, count in counter.items():
+            if num in int_to_class_name:
+                result[int_to_class_name[int(num)]] = count
+
         return {
             "image_shape": {
                 "height": results[0].orig_shape[0],
                 "width": results[0].orig_shape[1],
             },
             "speed": results[0].speed,
+            "appearances": result,
             "predictions": predictions,
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Define the class name to integer mapping
+class_name_to_int = {
+    "R": 0,
+    "C": 1,
+    "U": 2,
+    "Q": 3,
+    "J": 4,
+    "L": 5,
+    "RA": 6,
+    "D": 7,
+    "RN": 8,
+    "TP": 9,
+    "IC": 10,
+    "P": 11,
+    "CR": 12,
+    "M": 13,
+    "BTN": 14,
+    "FB": 15,
+    "CRA": 16,
+    "SW": 17,
+    "T": 18,
+    "F": 19,
+    "V": 20,
+    "LED": 21,
+    "S": 22,
+    "QA": 23,
+    "JP": 24
+}
+
+def map_classes_to_int(classes_list):
+    return [class_name_to_int[cls] for cls in classes_list if cls in class_name_to_int]
 
 @router.post("/predict-png")
-async def predict(
+async def predict_png(
     file: UploadFile = File(...),
     img_size: Optional[int] = Form(1280),
     show_conf: Optional[bool] = Form(True),
     show_labels: Optional[bool] = Form(True),
     show_boxes: Optional[bool] = Form(True),
     line_width: Optional[int] = Form(None),
+    classes: Optional[str] = Form([]),
 ):
-    if line_width == None:
-        line_width = img_size // 30
     try:
+        if line_width == None:
+            line_width = img_size // 30
+
         # Read the uploaded file
         image = read_imagefile(await file.read())
 
         # Predict on the image
-        results = model.predict(
-            source=image,
-            conf=0.3,
-            iou=0.7,
-        )
-
+        if classes != []:
+            results = model.predict(source=image, conf=0.3, iou=0.7, classes=map_classes_to_int(classes),)
+        else:
+            results = model.predict(source=image, conf=0.3, iou=0.7)
         # Extract prediction data
         img_with_boxes = results[0].plot(
             boxes=show_boxes,

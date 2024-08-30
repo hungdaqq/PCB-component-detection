@@ -42,7 +42,7 @@ Using yolov8 to detect PCB component
 
 ```bash
 curl --location 'http://localhost:8000/api/v1/predict' \
---form 'file=@"/home/hungdq30/Downloads/pcb_105f_cc_33.png"'
+--form 'file=@"./pcb_10f_cc_2.png"'
 ```
 
 **Response**
@@ -58,6 +58,9 @@ curl --location 'http://localhost:8000/api/v1/predict' \
         "inference": 764.0213966369629,
         "postprocess": 1.9803047180175781
     },
+    "appearances":{
+        "R":11,"C":47,"U":24,"Q":1,"J":0,"L":0,"RA":0,"D":1,"RN":0,"TP":0,"IC":0,"P":0,"CR":4,"M":0,"BTN":0,"FB":0,"CRA":0,"SW":0,"T":0,"F":1,"V":0,"LED":0,"S":0,"QA":0,"JP":0
+    }
     "predictions": [
         {
             "class_id": 24,
@@ -99,13 +102,14 @@ curl --location 'http://localhost:8000/api/v1/predict' \
 **Curl Command**
 
 ```bash
-curl --location 'http://localhost:8000/api/v1/predict' \
---form 'file=@"/home/hungdq30/Downloads/pcb_105f_cc_33.png"' \
+curl --location 'http://localhost:8000/api/v1/predict-png' \
+--form 'file=@"./pcb_10f_cc_2.png"' \
 --form 'img_size="640"' \
 --form 'show_conf="False"' \
---form 'show_labels="False"' \
---form 'show_boxes="False"' \
---form 'line_width="18"'
+--form 'show_labels="True"' \
+--form 'show_boxes="True"' \
+--form 'line_width="18"' \
+--form 'classes=["R","C"]'
 ```
 
 **Response**
