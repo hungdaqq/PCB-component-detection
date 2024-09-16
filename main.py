@@ -16,15 +16,18 @@ from ultralytics import YOLO
 from io import BytesIO
 from PIL import Image
 import easyocr
-
-# Initialize the reader
-reader = easyocr.Reader(['en']) 
+import torch
 
 # Initialize FastAPI app
 router = APIRouter(prefix="/api/v1")
 
+reader = easyocr.Reader(
+    lang_list=["en"], gpu=True if torch.cuda.is_available() else False
+)
+
 # Load the YOLO model
-model = YOLO("./weights/best.pt")
+pcb_detection_model = YOLO("./weights/pcb_detection_best.pt")
+text_detection_model = YOLO("./weights/text_detection_best.pt")
 
 
 def resize_image(image: np.ndarray, max_edge_length: int) -> np.ndarray:
@@ -65,7 +68,7 @@ async def predict(file: UploadFile = File(...)):
         image = read_imagefile(await file.read())
 
         # Predict on the image
-        results = model.predict(source=image, conf=0.3, iou=0.7)
+        results = pcb_detection_model.predict(source=image, conf=0.3, iou=0.7)
         # Extract prediction data
         predictions = []
         for box in results[0].boxes:
@@ -93,23 +96,6 @@ async def predict(file: UploadFile = File(...)):
             if num in int_to_class_name:
                 result[int_to_class_name[int(num)]] = count
 
-        # Perform OCR on the image
-        ocr_results = reader.readtext(image)
-
-        # Format the OCR results
-        ocr_predictions = []
-        for bbox, text, prob in ocr_results:
-            ocr_predictions.append({
-                "text": text,
-                "confidence": prob,
-                "bounding_box": {
-                    "xmin": int(bbox[0][0]),
-                    "ymin": int(bbox[0][1]),
-                    "xmax": int(bbox[2][0]),
-                    "ymax": int(bbox[2][1]),
-                },
-            })
-
         return {
             "image_shape": {
                 "height": results[0].orig_shape[0],
@@ -118,12 +104,11 @@ async def predict(file: UploadFile = File(...)):
             "speed": results[0].speed,
             "appearances": result,
             "predictions": predictions,
-            "ocr_results": ocr_predictions,  # Include OCR results in the response
         }
-
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # Define the class name to integer mapping
 class_name_to_int = {
@@ -151,14 +136,16 @@ class_name_to_int = {
     "LED": 21,
     "S": 22,
     "QA": 23,
-    "JP": 24
+    "JP": 24,
 }
 
 # Reverse mapping for convenience
 int_to_class_name = {v: k for k, v in class_name_to_int.items()}
 
+
 def map_classes_to_int(classes_list):
     return [class_name_to_int[cls] for cls in classes_list if cls in class_name_to_int]
+
 
 @router.post("/predict-png")
 async def predict_png(
@@ -167,7 +154,6 @@ async def predict_png(
     show_conf: Optional[bool] = Form(True),
     show_labels: Optional[bool] = Form(True),
     show_boxes: Optional[bool] = Form(True),
-    show_ocr: Optional[bool] = Form(True),
     line_width: Optional[int] = Form(None),
     classes: Optional[str] = Form([]),
 ):
@@ -180,9 +166,14 @@ async def predict_png(
 
         # Predict on the image
         if classes != []:
-            results = model.predict(source=image, conf=0.3, iou=0.7, classes=map_classes_to_int(classes),)
+            results = pcb_detection_model.predict(
+                source=image,
+                conf=0.3,
+                iou=0.7,
+                classes=map_classes_to_int(classes),
+            )
         else:
-            results = model.predict(source=image, conf=0.3, iou=0.7)
+            results = pcb_detection_model.predict(source=image, conf=0.3, iou=0.7)
         # Extract prediction data
         img_with_boxes = results[0].plot(
             boxes=show_boxes,
@@ -190,12 +181,6 @@ async def predict_png(
             conf=show_conf,
             line_width=line_width,
         )
-        if show_ocr:
-            result = reader.readtext(image)
-            for (bbox, text, prob) in result:
-                top_left = tuple(map(int, bbox[0]))  # Convert [x1, y1] to integers
-                bottom_right = tuple(map(int, bbox[2]))  # Convert [x3, y3] to integers
-                img_with_boxes = cv2.rectangle(img_with_boxes, top_left, bottom_right, (0, 255, 0), 3)
 
         # Resize image
         resized_image = resize_image(img_with_boxes, img_size)
@@ -204,6 +189,62 @@ async def predict_png(
         img_bytes = img_encoded.tobytes()
 
         return Response(content=img_bytes, media_type="image/png")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/ocr")
+async def predict_ocr(file: UploadFile = File(...)):
+    try:
+        # Read the uploaded file
+        image = read_imagefile(await file.read())
+
+        # Perform YOLOv8 text detection
+        yolo_results = text_detection_model(image)
+
+        # Extract bounding boxes from YOLOv8 results
+        boxes = (
+            yolo_results[0].boxes.xyxy.cpu().numpy()
+        )  # xyxy format (x_min, y_min, x_max, y_max)
+
+        for box in boxes:
+            x_min, y_min, x_max, y_max = map(int, box[:4])
+
+            # Draw bounding box on the image (you can also add text label if you want)
+            cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+
+            # Crop the detected text area from the image
+            cropped_image = image[y_min:y_max, x_min:x_max]
+
+            # Convert cropped image back to RGB for EasyOCR
+            cropped_rgb = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB)
+
+            # Perform OCR on the cropped image using EasyOCR
+            ocr_results = reader.readtext(cropped_rgb)
+
+            # Draw the recognized text on the image
+            for detection in ocr_results:
+                text, (ocr_x_min, ocr_y_min, ocr_x_max, ocr_y_max), _ = detection
+                # Draw text on the original image
+                cv2.putText(
+                    image,
+                    text,
+                    (x_min, y_min - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 0, 0),
+                    2,
+                )
+
+        # Convert the BGR image back to RGB for output
+        img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        _, img_encoded = cv2.imencode(".png", img_rgb)
+        img_bytes = img_encoded.tobytes()
+
+        # Return the image with bounding boxes as a response
+        return Response(img_bytes, media_type="image/png")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
