@@ -22,6 +22,7 @@ import torch
 router = APIRouter(prefix="/api/v1")
 # Load the YOLO model
 pcb_segmentation_model = YOLO("./weights/pcb_segmentation_best.pt")
+pcb_detection_model = YOLO("./weights/pcb_detection_best.pt")
 
 
 def resize_image(image: np.ndarray, max_edge_length: int) -> np.ndarray:
@@ -133,51 +134,49 @@ def map_classes_to_int(classes_list):
     return [class_name_to_int[cls] for cls in classes_list if cls in class_name_to_int]
 
 
-# @router.post("/predict-detection")
-# async def predict_png(
-#     file: UploadFile = File(...),
-#     img_size: Optional[int] = Form(1280),
-#     show_conf: Optional[bool] = Form(True),
-#     show_labels: Optional[bool] = Form(True),
-#     show_boxes: Optional[bool] = Form(True),
-#     line_width: Optional[int] = Form(None),
-#     classes: Optional[str] = Form([]),
-# ):
-#     try:
-#         if line_width == None:
-#             line_width = img_size // 30
+@router.post("/predict-detection")
+async def predict_png(
+    file: UploadFile = File(...),
+    img_size: Optional[int] = Form(1280),
+    show_conf: Optional[bool] = Form(True),
+    show_labels: Optional[bool] = Form(True),
+    show_boxes: Optional[bool] = Form(True),
+    line_width: Optional[int] = Form(None),
+    classes: Optional[str] = Form([]),
+):
+    try:
+        if line_width == None:
+            line_width = img_size // 60
 
-#         # Read the uploaded file
-#         image = read_imagefile(await file.read())
+        # Read the uploaded file
+        image = read_imagefile(await file.read())
 
-#         # Predict on the image
-#         if classes != []:
-#             results = pcb_detection_model.predict(
-#                 source=image,
-#                 conf=0.3,
-#                 iou=0.7,
-#                 classes=map_classes_to_int(classes),
-#             )
-#         else:
-#             results = pcb_detection_model.predict(source=image, conf=0.3, iou=0.7)
-#         # Extract prediction data
-#         img_with_boxes = results[0].plot(
-#             boxes=show_boxes,
-#             labels=show_labels,
-#             conf=show_conf,
-#             line_width=line_width,
-#         )
+        # Predict on the image
+        if classes != []:
+            results = pcb_detection_model.predict(
+                source=image,
+                classes=map_classes_to_int(classes),
+            )
+        else:
+            results = pcb_detection_model.predict(source=image)
+        # Extract prediction data
+        img_with_boxes = results[0].plot(
+            boxes=show_boxes,
+            labels=show_labels,
+            conf=show_conf,
+            line_width=line_width,
+        )
 
-#         # Resize image
-#         resized_image = resize_image(img_with_boxes, img_size)
+        # Resize image
+        resized_image = resize_image(img_with_boxes, img_size)
 
-#         _, img_encoded = cv2.imencode(".png", resized_image)
-#         img_bytes = img_encoded.tobytes()
+        _, img_encoded = cv2.imencode(".png", resized_image)
+        img_bytes = img_encoded.tobytes()
 
-#         return Response(content=img_bytes, media_type="image/png")
+        return Response(content=img_bytes, media_type="image/png")
 
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # Function to assign colors to segmentation masks
