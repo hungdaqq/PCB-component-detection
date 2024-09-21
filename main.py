@@ -20,14 +20,8 @@ import torch
 
 # Initialize FastAPI app
 router = APIRouter(prefix="/api/v1")
-
-reader = easyocr.Reader(
-    lang_list=["en"], gpu=True if torch.cuda.is_available() else False
-)
-
 # Load the YOLO model
-pcb_detection_model = YOLO("./weights/pcb_detection_best.pt")
-text_detection_model = YOLO("./weights/text_detection_best.pt")
+pcb_segmentation_model = YOLO("./weights/pcb_segmentation_best.pt")
 
 
 def resize_image(image: np.ndarray, max_edge_length: int) -> np.ndarray:
@@ -68,13 +62,14 @@ async def predict(file: UploadFile = File(...)):
         image = read_imagefile(await file.read())
 
         # Predict on the image
-        results = pcb_detection_model.predict(source=image, conf=0.3, iou=0.7)
+        results = pcb_segmentation_model.predict(source=image)
         # Extract prediction data
         predictions = []
-        for box in results[0].boxes:
+        for box, mask in zip(results[0].boxes, results[0].masks):
             predictions.append(
                 {
                     "class_id": int(box.cls[0]),
+                    "class_name": int_to_class_name[int(box.cls[0])],
                     "confidence": float(box.conf[0]),
                     "bounding_box": {
                         "xmin": int(box.xyxy[0][0]),
@@ -82,6 +77,7 @@ async def predict(file: UploadFile = File(...)):
                         "xmax": int(box.xyxy[0][2]),
                         "ymax": int(box.xyxy[0][3]),
                     },
+                    "mask": mask.xy.pop().reshape(-1, 1, 2).tolist(),
                 }
             )
 
@@ -114,29 +110,19 @@ async def predict(file: UploadFile = File(...)):
 class_name_to_int = {
     "R": 0,
     "C": 1,
-    "U": 2,
+    "IC": 2,
     "Q": 3,
     "J": 4,
     "L": 5,
-    "RA": 6,
+    "RN": 6,
     "D": 7,
-    "RN": 8,
-    "TP": 9,
-    "IC": 10,
-    "P": 11,
-    "CR": 12,
-    "M": 13,
-    "BTN": 14,
-    "FB": 15,
-    "CRA": 16,
-    "SW": 17,
-    "T": 18,
-    "F": 19,
-    "V": 20,
-    "LED": 21,
-    "S": 22,
-    "QA": 23,
-    "JP": 24,
+    "TP": 8,
+    "CR": 9,
+    "BTN": 10,
+    "T": 11,
+    "F": 12,
+    "P": 13,
+    "LED": 14,
 }
 
 # Reverse mapping for convenience
@@ -147,104 +133,140 @@ def map_classes_to_int(classes_list):
     return [class_name_to_int[cls] for cls in classes_list if cls in class_name_to_int]
 
 
-@router.post("/predict-png")
-async def predict_png(
+# @router.post("/predict-detection")
+# async def predict_png(
+#     file: UploadFile = File(...),
+#     img_size: Optional[int] = Form(1280),
+#     show_conf: Optional[bool] = Form(True),
+#     show_labels: Optional[bool] = Form(True),
+#     show_boxes: Optional[bool] = Form(True),
+#     line_width: Optional[int] = Form(None),
+#     classes: Optional[str] = Form([]),
+# ):
+#     try:
+#         if line_width == None:
+#             line_width = img_size // 30
+
+#         # Read the uploaded file
+#         image = read_imagefile(await file.read())
+
+#         # Predict on the image
+#         if classes != []:
+#             results = pcb_detection_model.predict(
+#                 source=image,
+#                 conf=0.3,
+#                 iou=0.7,
+#                 classes=map_classes_to_int(classes),
+#             )
+#         else:
+#             results = pcb_detection_model.predict(source=image, conf=0.3, iou=0.7)
+#         # Extract prediction data
+#         img_with_boxes = results[0].plot(
+#             boxes=show_boxes,
+#             labels=show_labels,
+#             conf=show_conf,
+#             line_width=line_width,
+#         )
+
+#         # Resize image
+#         resized_image = resize_image(img_with_boxes, img_size)
+
+#         _, img_encoded = cv2.imencode(".png", resized_image)
+#         img_bytes = img_encoded.tobytes()
+
+#         return Response(content=img_bytes, media_type="image/png")
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Function to assign colors to segmentation masks
+def assign_colors_to_masks(masks, classes, color_values):
+    # Create a blank canvas for the colored mask
+    height, width = masks.shape[1], masks.shape[2]
+    colored_mask = np.zeros((height, width, 3), dtype=np.uint8)
+
+    # Loop through each mask and assign corresponding color based on class label
+    for idx, mask in enumerate(masks):
+        class_idx = int(classes[idx])  # Get the class index of the mask
+        color = color_values.get(
+            class_idx, (0, 0, 0)
+        )  # Default to black if class not in color_values
+        colored_mask[mask == 1] = color  # Apply color where mask is 1 (object present)
+
+    return colored_mask
+
+
+# Define the color mapping (example with 26 classes)
+color_values = {
+    0: (255, 0, 0),  # R
+    1: (255, 255, 0),  # C
+    2: (185, 215, 237),  # IC
+    3: (170, 0, 255),  # Q
+    4: (255, 127, 0),  # J
+    5: (191, 255, 0),  # L
+    6: (0, 64, 255),  # RN
+    7: (106, 255, 0),  # D
+    8: (237, 185, 185),  # TP
+    9: (220, 185, 237),  # CR
+    10: (143, 35, 35),  # BTN
+    11: (79, 143, 35),  # T
+    12: (115, 115, 115),  # F
+    13: (231, 233, 185),  # P
+    14: (245, 130, 48),  # LED
+}
+
+
+@router.post("/predict-segmentation")
+async def predict_segmentation(
     file: UploadFile = File(...),
     img_size: Optional[int] = Form(1280),
+    show_detection: Optional[bool] = Form(False),
+    show_boxes: Optional[bool] = Form(False),
     show_conf: Optional[bool] = Form(True),
     show_labels: Optional[bool] = Form(True),
-    show_boxes: Optional[bool] = Form(True),
+    show_masks: Optional[bool] = Form(True),
+    show_segmentation: Optional[bool] = Form(False),
     line_width: Optional[int] = Form(None),
     classes: Optional[str] = Form([]),
 ):
     try:
-        if line_width == None:
-            line_width = img_size // 30
-
         # Read the uploaded file
         image = read_imagefile(await file.read())
 
-        # Predict on the image
         if classes != []:
-            results = pcb_detection_model.predict(
+            results = pcb_segmentation_model.predict(
                 source=image,
-                conf=0.3,
-                iou=0.7,
                 classes=map_classes_to_int(classes),
             )
         else:
-            results = pcb_detection_model.predict(source=image, conf=0.3, iou=0.7)
-        # Extract prediction data
-        img_with_boxes = results[0].plot(
-            boxes=show_boxes,
-            labels=show_labels,
-            conf=show_conf,
-            line_width=line_width,
-        )
+            results = pcb_segmentation_model.predict(source=image)
 
-        # Resize image
-        resized_image = resize_image(img_with_boxes, img_size)
+        # Resize image to match mask dimensions if needed
 
+        if show_segmentation:
+            masks = results[0].masks.data.cpu().numpy()
+            classes = results[0].boxes.cls.cpu().numpy()
+            colored_mask = assign_colors_to_masks(masks, classes, color_values)
+            image_rgb = cv2.resize(
+                image, (colored_mask.shape[1], colored_mask.shape[0])
+            )
+            result_image = cv2.addWeighted(image_rgb, 0.2, colored_mask, 0.8, 0)
+
+        if show_detection:
+            result_image = results[0].plot(
+                boxes=show_boxes,
+                masks=show_masks,
+                labels=show_labels,
+                conf=show_conf,
+                line_width=line_width,
+            )
+
+        resized_image = resize_image(result_image, img_size)
         _, img_encoded = cv2.imencode(".png", resized_image)
         img_bytes = img_encoded.tobytes()
 
         return Response(content=img_bytes, media_type="image/png")
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/ocr")
-async def predict_ocr(file: UploadFile = File(...)):
-    try:
-        # Read the uploaded file
-        image = read_imagefile(await file.read())
-
-        # Perform YOLOv8 text detection
-        yolo_results = text_detection_model(image)
-
-        # Extract bounding boxes from YOLOv8 results
-        boxes = (
-            yolo_results[0].boxes.xyxy.cpu().numpy()
-        )  # xyxy format (x_min, y_min, x_max, y_max)
-
-        for box in boxes:
-            x_min, y_min, x_max, y_max = map(int, box[:4])
-
-            # Draw bounding box on the image (you can also add text label if you want)
-            cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-
-            # Crop the detected text area from the image
-            cropped_image = image[y_min:y_max, x_min:x_max]
-
-            # Convert cropped image back to RGB for EasyOCR
-            cropped_rgb = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB)
-
-            # Perform OCR on the cropped image using EasyOCR
-            ocr_results = reader.readtext(cropped_rgb)
-
-            # Draw the recognized text on the image
-            for detection in ocr_results:
-                text, (ocr_x_min, ocr_y_min, ocr_x_max, ocr_y_max), _ = detection
-                # Draw text on the original image
-                cv2.putText(
-                    image,
-                    text,
-                    (x_min, y_min - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 0, 0),
-                    2,
-                )
-
-        # Convert the BGR image back to RGB for output
-        img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        _, img_encoded = cv2.imencode(".png", img_rgb)
-        img_bytes = img_encoded.tobytes()
-
-        # Return the image with bounding boxes as a response
-        return Response(img_bytes, media_type="image/png")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

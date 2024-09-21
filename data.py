@@ -10,8 +10,8 @@ logging.basicConfig(
 )
 
 # Define paths
-labels_folder = "/home/hung/Downloads/pcb/ocr_annotation"
-images_folder = "/home/hung/Downloads/pcb/pcb_image"
+labels_folder = "/home/hung/Documents/Dataset/pcb/ocr_annotation"
+images_folder = "/home/hung/Documents/Dataset/pcb/pcb_image"
 output_folder = "./test"
 
 # Ensure output folder and orientation subfolders exist
@@ -39,7 +39,8 @@ for csv_file in csv_files:
         coordinates_str = row["Vertices"]
         orientation = row["Orientation"]
         instance_id = row["Instance ID"]
-
+        if row["Validated"] == True:
+            continue
         # Ensure the orientation is valid
         if orientation not in [0, 90, 180, 270]:
             logging.warning(
