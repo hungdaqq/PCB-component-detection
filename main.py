@@ -138,6 +138,8 @@ def map_classes_to_int(classes_list):
 async def predict_png(
     file: UploadFile = File(...),
     img_size: Optional[int] = Form(1280),
+    conf: Optional[float] = Form(0.25),
+    iou: Optional[float] = Form(0.45),
     show_conf: Optional[bool] = Form(True),
     show_labels: Optional[bool] = Form(True),
     show_boxes: Optional[bool] = Form(True),
@@ -155,10 +157,16 @@ async def predict_png(
         if classes != []:
             results = pcb_detection_model.predict(
                 source=image,
+                conf=conf,
+                iou=iou,
                 classes=map_classes_to_int(classes),
             )
         else:
-            results = pcb_detection_model.predict(source=image)
+            results = pcb_detection_model.predict(
+                source=image,
+                conf=conf,
+                iou=iou,
+            )
         # Extract prediction data
         img_with_boxes = results[0].plot(
             boxes=show_boxes,
