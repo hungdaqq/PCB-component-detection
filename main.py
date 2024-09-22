@@ -84,6 +84,148 @@ async def predict(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/predict-faster-rcnn")
+async def predict_ssd(
+    file: UploadFile = File(...),
+    img_size: Optional[int] = Form(1280),
+    conf: Optional[float] = Form(0.25),
+    # iou: Optional[float] = Form(0.45),
+    show_conf: Optional[bool] = Form(True),
+    # show_labels: Optional[bool] = Form(True),
+    # show_boxes: Optional[bool] = Form(True),
+    line_width: Optional[int] = Form(None),
+    classes: Optional[str] = Form([]),
+):
+    if line_width == None:
+        line_width = img_size // 30
+    try:
+        # Read the uploaded file
+        image = read_imagefile(await file.read())
+
+        boxes, labels, scores = get_prediction(
+            fasterrcnn_model,
+            image,
+            conf,
+            classes,
+        )
+
+        for box, label, score in zip(boxes, labels, scores):
+            # Get bounding box coordinates
+            xmin, ymin, xmax, ymax = map(int, box)
+
+            # Get the class name and color
+            class_name = int_to_class_name.get(label, "Unknown")
+            color = color_values.get(
+                label, (255, 255, 255)
+            )  # Default to white if not found
+
+            # Draw the bounding box
+            cv2.rectangle(
+                image,
+                (xmin, ymin),
+                (xmax, ymax),
+                color,
+                thickness=line_width,
+            )
+            if show_conf:
+                label_text = f"{class_name}: {score:.2f}"
+            else:
+                label_text = class_name
+            # Draw the label text above the bounding box
+            cv2.putText(
+                image,
+                label_text,
+                (xmin, ymin - 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                4,  # Font scale
+                color,
+                img_size // 66,  # Line thickness
+                cv2.LINE_AA,
+            )
+
+        # Resize image
+        resized_image = resize_image(image, img_size)
+
+        _, img_encoded = cv2.imencode(".png", resized_image)
+        img_bytes = img_encoded.tobytes()
+
+        return Response(content=img_bytes, media_type="image/png")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/predict-ssd")
+async def predict_ssd(
+    file: UploadFile = File(...),
+    img_size: Optional[int] = Form(1280),
+    conf: Optional[float] = Form(0.25),
+    # iou: Optional[float] = Form(0.45),
+    show_conf: Optional[bool] = Form(True),
+    # show_labels: Optional[bool] = Form(True),
+    # show_boxes: Optional[bool] = Form(True),
+    line_width: Optional[int] = Form(None),
+    classes: Optional[str] = Form([]),
+):
+    if line_width == None:
+        line_width = img_size // 30
+    try:
+        # Read the uploaded file
+        image = read_imagefile(await file.read())
+
+        boxes, labels, scores = get_prediction(
+            ssd_model,
+            image,
+            conf,
+            classes,
+        )
+
+        for box, label, score in zip(boxes, labels, scores):
+            # Get bounding box coordinates
+            xmin, ymin, xmax, ymax = map(int, box)
+
+            # Get the class name and color
+            class_name = int_to_class_name.get(label, "Unknown")
+            color = color_values.get(
+                label, (255, 255, 255)
+            )  # Default to white if not found
+
+            # Draw the bounding box
+            cv2.rectangle(
+                image,
+                (xmin, ymin),
+                (xmax, ymax),
+                color,
+                thickness=line_width,
+            )
+            if show_conf:
+                label_text = f"{class_name}: {score:.2f}"
+            else:
+                label_text = class_name
+            # Draw the label text above the bounding box
+            cv2.putText(
+                image,
+                label_text,
+                (xmin, ymin - 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                4,  # Font scale
+                color,
+                img_size // 66,  # Line thickness
+                cv2.LINE_AA,
+            )
+
+        # Resize image
+        resized_image = resize_image(image, img_size)
+
+        _, img_encoded = cv2.imencode(".png", resized_image)
+        img_bytes = img_encoded.tobytes()
+
+        return Response(content=img_bytes, media_type="image/png")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/predict-detection")
 async def predict_png(
     file: UploadFile = File(...),
@@ -102,78 +244,22 @@ async def predict_png(
     try:
         # Read the uploaded file
         image = read_imagefile(await file.read())
-        if model == "yolo":
-            # Predict on the image
-            if classes != []:
-                results = pcb_detection_model.predict(
-                    source=image,
-                    conf=conf,
-                    iou=iou,
-                    classes=map_classes_to_int(classes),
-                )
-            else:
-                results = pcb_detection_model.predict(source=image, conf=conf, iou=iou)
-            # Extract prediction data
-            result_image = results[0].plot(
-                boxes=show_boxes,
-                labels=show_labels,
-                conf=show_conf,
+        # Predict on the image
+        if classes != []:
+            results = pcb_detection_model.predict(
+                source=image,
+                conf=conf,
+                iou=iou,
+                classes=map_classes_to_int(classes),
             )
-
         else:
-            if model == "faster-rcnn":
-                boxes, labels, scores = get_prediction(
-                    fasterrcnn_model,
-                    image,
-                    conf,
-                    classes,
-                )
-            elif model == "ssd":
-                boxes, labels, scores = get_prediction(
-                    ssd_model,
-                    image,
-                    conf,
-                    classes,
-                )
-            else:
-                raise HTTPException(
-                    status_code=400, detail="Model should be yolo/faster-rcnn/ssd"
-                )
-
-            result_image = image.copy()
-            for box, label, score in zip(boxes, labels, scores):
-                # Get bounding box coordinates
-                xmin, ymin, xmax, ymax = map(int, box)
-
-                # Get the class name and color
-                class_name = int_to_class_name.get(label, "Unknown")
-                color = color_values.get(
-                    label, (255, 255, 255)
-                )  # Default to white if not found
-
-                # Draw the bounding box
-                cv2.rectangle(
-                    result_image,
-                    (xmin, ymin),
-                    (xmax, ymax),
-                    color,
-                    thickness=line_width,
-                )
-                if show_conf:
-                    label_text = f"{class_name}: {score:.2f}"
-                else:
-                    label_text = class_name
-                # Draw the label text above the bounding box
-                cv2.putText(
-                    result_image,
-                    label_text,
-                    (xmin, ymin - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    4,  # Font scale
-                    color,
-                    img_size // 66,  # Line thickness
-                    cv2.LINE_AA,
-                )
+            results = pcb_detection_model.predict(source=image, conf=conf, iou=iou)
+        # Extract prediction data
+        result_image = results[0].plot(
+            boxes=show_boxes,
+            labels=show_labels,
+            conf=show_conf,
+        )
 
         # Resize image
         resized_image = resize_image(result_image, img_size)
