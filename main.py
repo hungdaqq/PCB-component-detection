@@ -220,7 +220,7 @@ async def predict_segmentation(
     try:
         # Read the uploaded file
         image = read_imagefile(await file.read())
-
+        print(map_classes_to_int(classes))
         if classes != []:
             results = pcb_segmentation_model.predict(
                 source=image,
@@ -238,7 +238,9 @@ async def predict_segmentation(
             image_rgb = cv2.resize(
                 image, (colored_mask.shape[1], colored_mask.shape[0])
             )
-            result_image = cv2.addWeighted(image_rgb, 0.2, colored_mask, 0.8, 0)
+            result_image = cv2.addWeighted(
+                image_rgb, 0.2, cv2.cvtColor(colored_mask, cv2.COLOR_BGR2RGB), 0.8, 0
+            )
 
         if show_detection:
             result_image = results[0].plot(
@@ -248,7 +250,6 @@ async def predict_segmentation(
                 conf=show_conf,
                 line_width=line_width,
             )
-
         resized_image = resize_image(result_image, img_size)
         _, img_encoded = cv2.imencode(".png", resized_image)
         img_bytes = img_encoded.tobytes()

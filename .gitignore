@@ -4,3 +4,4 @@ __pycache__
 test/
 orientation_data/
 *.zip
+weights/
