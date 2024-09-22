@@ -13,47 +13,24 @@ from collections import Counter
 import cv2
 import numpy as np
 from ultralytics import YOLO
-from io import BytesIO
-from PIL import Image
-import easyocr
-import torch
+from torchvision_detection import load_fasterrcnn, load_ssd, get_prediction
+from utils import (
+    class_name_to_int,
+    color_values,
+    int_to_class_name,
+    map_classes_to_int,
+    resize_image,
+    read_imagefile,
+)
 
 # Initialize FastAPI app
 router = APIRouter(prefix="/api/v1")
-# Load the YOLO model
+
+
 pcb_segmentation_model = YOLO("./weights/pcb_segmentation_best.pt")
 pcb_detection_model = YOLO("./weights/pcb_detection_best.pt")
-
-
-def resize_image(image: np.ndarray, max_edge_length: int) -> np.ndarray:
-    """
-    Resize the image so that the longer edge is equal to max_edge_length,
-    maintaining the aspect ratio.
-    """
-    h, w = image.shape[:2]
-    if h > w:
-        scale = max_edge_length / h
-        new_size = (int(w * scale), max_edge_length)
-    else:
-        scale = max_edge_length / w
-        new_size = (max_edge_length, int(h * scale))
-
-    resized_image = cv2.resize(image, new_size, interpolation=cv2.INTER_LINEAR)
-    return resized_image
-
-
-def read_imagefile(file) -> np.ndarray:
-    """
-    Read uploaded image file and convert it to OpenCV format.
-
-    Args:
-        file (UploadFile): Uploaded image file.
-
-    Returns:
-        np.ndarray: Image in OpenCV format (BGR).
-    """
-    image = Image.open(BytesIO(file))
-    return cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+fasterrcnn_model = load_fasterrcnn(15)
+ssd_model = load_ssd(15)
 
 
 @router.post("/predict")
@@ -107,33 +84,6 @@ async def predict(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Define the class name to integer mapping
-class_name_to_int = {
-    "R": 0,
-    "C": 1,
-    "IC": 2,
-    "Q": 3,
-    "J": 4,
-    "L": 5,
-    "RN": 6,
-    "D": 7,
-    "TP": 8,
-    "CR": 9,
-    "BTN": 10,
-    "T": 11,
-    "F": 12,
-    "P": 13,
-    "LED": 14,
-}
-
-# Reverse mapping for convenience
-int_to_class_name = {v: k for k, v in class_name_to_int.items()}
-
-
-def map_classes_to_int(classes_list):
-    return [class_name_to_int[cls] for cls in classes_list if cls in class_name_to_int]
-
-
 @router.post("/predict-detection")
 async def predict_png(
     file: UploadFile = File(...),
@@ -145,38 +95,88 @@ async def predict_png(
     show_boxes: Optional[bool] = Form(True),
     line_width: Optional[int] = Form(None),
     classes: Optional[str] = Form([]),
+    model: Optional[str] = Form("yolo"),
 ):
+    if line_width == None:
+        line_width = img_size // 30
     try:
-        if line_width == None:
-            line_width = img_size // 60
-
         # Read the uploaded file
         image = read_imagefile(await file.read())
+        if model == "yolo":
+            # Predict on the image
+            if classes != []:
+                results = pcb_detection_model.predict(
+                    source=image,
+                    conf=conf,
+                    iou=iou,
+                    classes=map_classes_to_int(classes),
+                )
+            else:
+                results = pcb_detection_model.predict(source=image, conf=conf, iou=iou)
+            # Extract prediction data
+            result_image = results[0].plot(
+                boxes=show_boxes,
+                labels=show_labels,
+                conf=show_conf,
+            )
 
-        # Predict on the image
-        if classes != []:
-            results = pcb_detection_model.predict(
-                source=image,
-                conf=conf,
-                iou=iou,
-                classes=map_classes_to_int(classes),
-            )
         else:
-            results = pcb_detection_model.predict(
-                source=image,
-                conf=conf,
-                iou=iou,
-            )
-        # Extract prediction data
-        img_with_boxes = results[0].plot(
-            boxes=show_boxes,
-            labels=show_labels,
-            conf=show_conf,
-            line_width=line_width,
-        )
+            if model == "faster-rcnn":
+                boxes, labels, scores = get_prediction(
+                    fasterrcnn_model,
+                    image,
+                    conf,
+                    classes,
+                )
+            elif model == "ssd":
+                boxes, labels, scores = get_prediction(
+                    ssd_model,
+                    image,
+                    conf,
+                    classes,
+                )
+            else:
+                raise HTTPException(
+                    status_code=400, detail="Model should be yolo/faster-rcnn/ssd"
+                )
+
+            result_image = image.copy()
+            for box, label, score in zip(boxes, labels, scores):
+                # Get bounding box coordinates
+                xmin, ymin, xmax, ymax = map(int, box)
+
+                # Get the class name and color
+                class_name = int_to_class_name.get(label, "Unknown")
+                color = color_values.get(
+                    label, (255, 255, 255)
+                )  # Default to white if not found
+
+                # Draw the bounding box
+                cv2.rectangle(
+                    result_image,
+                    (xmin, ymin),
+                    (xmax, ymax),
+                    color,
+                    thickness=line_width,
+                )
+                if show_conf:
+                    label_text = f"{class_name}: {score:.2f}"
+                else:
+                    label_text = class_name
+                # Draw the label text above the bounding box
+                cv2.putText(
+                    result_image,
+                    label_text,
+                    (xmin, ymin - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    4,  # Font scale
+                    color,
+                    img_size // 66,  # Line thickness
+                    cv2.LINE_AA,
+                )
 
         # Resize image
-        resized_image = resize_image(img_with_boxes, img_size)
+        resized_image = resize_image(result_image, img_size)
 
         _, img_encoded = cv2.imencode(".png", resized_image)
         img_bytes = img_encoded.tobytes()
@@ -202,26 +202,6 @@ def assign_colors_to_masks(masks, classes, color_values):
         colored_mask[mask == 1] = color  # Apply color where mask is 1 (object present)
 
     return colored_mask
-
-
-# Define the color mapping (example with 26 classes)
-color_values = {
-    0: (255, 0, 0),  # R
-    1: (255, 255, 0),  # C
-    2: (185, 215, 237),  # IC
-    3: (170, 0, 255),  # Q
-    4: (255, 127, 0),  # J
-    5: (191, 255, 0),  # L
-    6: (0, 64, 255),  # RN
-    7: (106, 255, 0),  # D
-    8: (237, 185, 185),  # TP
-    9: (220, 185, 237),  # CR
-    10: (143, 35, 35),  # BTN
-    11: (79, 143, 35),  # T
-    12: (115, 115, 115),  # F
-    13: (231, 233, 185),  # P
-    14: (245, 130, 48),  # LED
-}
 
 
 @router.post("/predict-segmentation")

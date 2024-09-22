@@ -3,3 +3,4 @@ pcb/
 __pycache__
 test/
 orientation_data/
+*.zip
